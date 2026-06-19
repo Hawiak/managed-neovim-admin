@@ -1,0 +1,15 @@
+# Built binaries
+/nvim-manifest
+/nvim-mirror
+
+# Signing keys — never commit
+*.pem
+*.key
+
+# macOS
+.DS_Store
+
+# Editor
+.idea/
+.vscode/
+*.swp
