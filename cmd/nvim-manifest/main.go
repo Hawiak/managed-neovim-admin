@@ -28,7 +28,7 @@ func main() {
 	case "verify":
 		err = runVerify(manifestPath)
 	case "sign":
-		err = runVerify(manifestPath)
+		err = runSign(manifestPath, args)
 	case "verify-sig":
 		err = runVerifySig(manifestPath, args)
 	default:
