@@ -10,14 +10,16 @@ import (
 	"text/template"
 )
 
-//go:embed install.sh.tmpl managed-neovim.toml.tmpl
+//go:embed install.sh.tmpl managed-neovim.toml.tmpl release.yml.tmpl
 var templates embed.FS
 
 type distroConfig struct {
-	Org            string
-	ArtifactoryURL string
-	SigningKey      string
-	Version        string
+	Org             string
+	ArtifactoryURL  string
+	SigningKey       string
+	Version         string
+	ManagedNvimRepo string
+	ManagedNvimRef  string
 }
 
 func main() {
@@ -25,6 +27,8 @@ func main() {
 	url := flag.String("url", "", "Artifactory base URL (e.g. https://artifactory.company.com/managed-neovim)")
 	key := flag.String("key", "", "ed25519 public key (base64-encoded)")
 	version := flag.String("version", "latest", "Wrapper version to install")
+	nvimRepo := flag.String("nvim-repo", "Hawiak/managed-nvim", "GitHub repo to build the wrapper from (owner/repo)")
+	nvimRef := flag.String("nvim-ref", "main", "Git ref of managed-nvim to build from (tag, branch, or SHA)")
 	flag.Parse()
 
 	if *org == "" || *url == "" || *key == "" {
@@ -33,10 +37,12 @@ func main() {
 	}
 
 	cfg := distroConfig{
-		Org:            *org,
-		ArtifactoryURL: *url,
-		SigningKey:      *key,
-		Version:        *version,
+		Org:             *org,
+		ArtifactoryURL:  *url,
+		SigningKey:       *key,
+		Version:         *version,
+		ManagedNvimRepo: *nvimRepo,
+		ManagedNvimRef:  *nvimRef,
 	}
 
 	outDir := *org + "-nvim-distro"
@@ -45,13 +51,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("Distro created at ./%s\n", outDir)
+	fmt.Printf("Distro created at ./%s\n\n", outDir)
 	fmt.Printf("Next steps:\n")
 	fmt.Printf("  1. cd %s\n", outDir)
-	fmt.Printf("  2. Review and commit\n")
-	fmt.Printf("  3. Push to your org's GitHub\n")
+	fmt.Printf("  2. Add secrets to the GitHub repo:\n")
+	fmt.Printf("       MANIFEST_PUBLIC_KEY — base64 ed25519 public key\n")
+	fmt.Printf("       ARTIFACTORY_TOKEN   — token with write access to %s\n", *url)
+	fmt.Printf("  3. Push and tag a release:\n")
+	fmt.Printf("       git push && git tag v1.0.0 && git push --tags\n")
 	fmt.Printf("  4. Share the install one-liner with employees:\n")
-	fmt.Printf("     curl -fsSL https://raw.githubusercontent.com/<org>/%s/main/install.sh | sudo bash\n", outDir)
+	fmt.Printf("       curl -fsSL https://raw.githubusercontent.com/<org>/%s/main/install.sh | sudo bash\n", outDir)
 }
 
 func generate(outDir string, cfg distroConfig) error {
@@ -62,6 +71,7 @@ func generate(outDir string, cfg distroConfig) error {
 	dirs := []string{
 		outDir,
 		filepath.Join(outDir, "manifest"),
+		filepath.Join(outDir, ".github", "workflows"),
 	}
 	for _, d := range dirs {
 		if err := os.MkdirAll(d, 0755); err != nil {
@@ -74,6 +84,10 @@ func generate(outDir string, cfg distroConfig) error {
 	}
 
 	if err := renderTemplate("managed-neovim.toml.tmpl", filepath.Join(outDir, "managed-neovim.toml"), cfg, 0644); err != nil {
+		return err
+	}
+
+	if err := renderTemplate("release.yml.tmpl", filepath.Join(outDir, ".github", "workflows", "release.yml"), cfg, 0644); err != nil {
 		return err
 	}
 

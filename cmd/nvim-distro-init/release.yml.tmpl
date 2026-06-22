@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        include:
+          - os: Darwin
+            goos: darwin
+            goarch: arm64
+          - os: Darwin
+            goos: darwin
+            goarch: amd64
+          - os: Linux
+            goos: linux
+            goarch: arm64
+          - os: Linux
+            goos: linux
+            goarch: amd64
+
+    steps:
+      - name: Checkout managed-nvim
+        uses: actions/checkout@v4
+        with:
+          repository: {{.ManagedNvimRepo}}
+          ref: {{.ManagedNvimRef}}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          MANIFEST_PUBLIC_KEY: ${{ secrets.MANIFEST_PUBLIC_KEY }}
+        run: |
+          name="nvim-wrapper-${{ matrix.os }}-${{ matrix.goarch }}"
+          go build \
+            -ldflags="-X main.manifestPublicKey=${MANIFEST_PUBLIC_KEY}" \
+            -o "${name}" \
+            ./cmd/nvim-wrapper/
+          sha256sum "${name}" > "${name}.sha256"
+
+      - name: Publish to Artifactory
+        env:
+          ARTIFACTORY_TOKEN: ${{ secrets.ARTIFACTORY_TOKEN }}
+        run: |
+          name="nvim-wrapper-${{ matrix.os }}-${{ matrix.goarch }}"
+          version="${{ github.ref_name }}"
+          base="{{.ArtifactoryURL}}/releases/${version}"
+          curl -fsSL -H "Authorization: Bearer ${ARTIFACTORY_TOKEN}" \
+            -T "${name}" "${base}/${name}"
+          curl -fsSL -H "Authorization: Bearer ${ARTIFACTORY_TOKEN}" \
+            -T "${name}.sha256" "${base}/${name}.sha256"
+
+  publish-config:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Publish managed-neovim.toml to Artifactory
+        env:
+          ARTIFACTORY_TOKEN: ${{ secrets.ARTIFACTORY_TOKEN }}
+        run: |
+          version="${{ github.ref_name }}"
+          curl -fsSL -H "Authorization: Bearer ${ARTIFACTORY_TOKEN}" \
+            -T managed-neovim.toml \
+            "{{.ArtifactoryURL}}/releases/${version}/managed-neovim.toml"

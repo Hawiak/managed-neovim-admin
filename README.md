@@ -22,13 +22,25 @@ nvim-distro-init \
 | `--url` | yes | Artifactory base URL — baked into `install.sh` and `managed-neovim.toml` |
 | `--key` | yes | base64-encoded ed25519 public key — baked into `managed-neovim.toml` |
 | `--version` | no | Wrapper version to install (default: `latest`) |
+| `--nvim-repo` | no | GitHub repo to build the wrapper from (default: `Hawiak/managed-nvim`) |
+| `--nvim-ref` | no | Git ref of managed-nvim to build from — tag, branch, or SHA (default: `main`) |
 
 Outputs `mycompany-nvim-distro/` — a ready-to-push git repo containing:
 - `install.sh` — hardcoded with the org's Artifactory URL and version
 - `managed-neovim.toml` — pre-filled with URL and signing key
 - `manifest/plugins.json` — empty starter manifest
+- `.github/workflows/release.yml` — builds `nvim-wrapper` from managed-nvim source with the org's public key and publishes binaries + checksums to Artifactory on every version tag
 
-Push it to GitHub and share the install one-liner with employees:
+Before pushing, add two secrets to the GitHub repo:
+- `MANIFEST_PUBLIC_KEY` — the base64 ed25519 public key (same key used with `nvim-manifest sign`)
+- `ARTIFACTORY_TOKEN` — token with write access to the org's Artifactory
+
+Then tag a release to trigger the build:
+```bash
+git tag v1.0.0 && git push --tags
+```
+
+Share the install one-liner with employees:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mycompany/mycompany-nvim-distro/main/install.sh | sudo bash
