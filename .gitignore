@@ -1,6 +1,7 @@
 # Built binaries
 /nvim-manifest
 /nvim-mirror
+/nvim-distro-init
 
 # Signing keys — never commit
 *.pem

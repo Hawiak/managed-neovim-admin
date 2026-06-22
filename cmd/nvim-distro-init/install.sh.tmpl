@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+OS=$(uname -s)
+ARCH=$(uname -m)
+
+case "$ARCH" in
+  x86_64) ARCH="amd64" ;;
+  arm64|aarch64) ARCH="arm64" ;;
+  *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;;
+esac
+
+case "$OS" in
+  Darwin|Linux) ;;
+  *) echo "Unsupported OS: $OS" >&2; exit 1 ;;
+esac
+
+echo "Platform: ${OS}-${ARCH}"
+
+ARTIFACTORY_URL="{{.ArtifactoryURL}}"
+VERSION="{{.Version}}"
+INSTALL_DIR="/opt/managed-neovim"
+
+if [[ $EUID -ne 0 ]]; then
+  echo "This script must be run as root to install to ${INSTALL_DIR}" >&2
+  exit 1
+fi
+
+REAL_NVIM=$(command -v nvim || true)
+
+if [[ -z "$REAL_NVIM" ]]; then
+  echo "nvim not found in PATH. Install Neovim first." >&2
+  exit 1
+fi
+
+echo "Found nvim at: $REAL_NVIM"
+
+mkdir -p "$INSTALL_DIR"
+
+BINARY_NAME="nvim-wrapper-${OS}-${ARCH}"
+DOWNLOAD_URL="${ARTIFACTORY_URL}/releases/${VERSION}/${BINARY_NAME}"
+CHECKSUM_URL="${ARTIFACTORY_URL}/releases/${VERSION}/${BINARY_NAME}.sha256"
+
+echo "Downloading ${DOWNLOAD_URL}..."
+curl -fsSL "${DOWNLOAD_URL}" -o "${INSTALL_DIR}/nvim-wrapper"
+
+echo "Verifying checksum..."
+EXPECTED_CHECKSUM=$(curl -fsSL "${CHECKSUM_URL}" | awk '{print $1}')
+if [[ "$OS" == "Darwin" ]]; then
+  ACTUAL_CHECKSUM=$(shasum -a 256 "${INSTALL_DIR}/nvim-wrapper" | awk '{print $1}')
+else
+  ACTUAL_CHECKSUM=$(sha256sum "${INSTALL_DIR}/nvim-wrapper" | awk '{print $1}')
+fi
+
+if [[ "$EXPECTED_CHECKSUM" != "$ACTUAL_CHECKSUM" ]]; then
+  echo "Checksum verification failed for ${INSTALL_DIR}/nvim-wrapper" >&2
+  echo "Expected: ${EXPECTED_CHECKSUM}" >&2
+  echo "Actual:   ${ACTUAL_CHECKSUM}" >&2
+  rm -f "${INSTALL_DIR}/nvim-wrapper"
+  exit 1
+fi
+
+echo "Checksum verified."
+
+chmod +x "${INSTALL_DIR}/nvim-wrapper"
+
+echo "Installing..."
+cp "$REAL_NVIM" "${INSTALL_DIR}/nvim.real"
+cp "${INSTALL_DIR}/nvim-wrapper" "${INSTALL_DIR}/nvim"
+rm "${INSTALL_DIR}/nvim-wrapper"
+
+ln -sf "${INSTALL_DIR}/nvim" /usr/local/bin/nvim
+
+echo "Downloading config..."
+curl -fsSL "${ARTIFACTORY_URL}/releases/${VERSION}/managed-neovim.toml" -o "${INSTALL_DIR}/managed-neovim.toml"
+
+echo ""
+echo "managed-neovim installed successfully."
+echo "Type 'nvim' to get started."
