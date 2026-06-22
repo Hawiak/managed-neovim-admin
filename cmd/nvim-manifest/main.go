@@ -31,6 +31,8 @@ func main() {
 		err = runSign(manifestPath, args)
 	case "verify-sig":
 		err = runVerifySig(manifestPath, args)
+	case "keygen":
+		err = runKeygen()
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %s\n", cmd)
 		printUsage()
@@ -46,10 +48,11 @@ func main() {
 func printUsage() {
 	fmt.Println(`nvim-manifest - managed-nvim plugin manifest tool
 
-	Usage:
-	nvim-manifest add <github-repo> <approved-by>
-	nvim-manifest remove <plugin-name>
-	nvim-manifest verify
-	nvim-manifest sign <private-key-file>
-	nvim-manifest verify-sig <public-key-file>`)
+Usage:
+  nvim-manifest keygen
+  nvim-manifest add <github-repo> <approved-by>
+  nvim-manifest remove <plugin-name>
+  nvim-manifest verify
+  nvim-manifest sign <private-key-file>
+  nvim-manifest verify-sig <public-key-file>`)
 }

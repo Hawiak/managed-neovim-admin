@@ -1,46 +1,113 @@
 # managed-neovim-admin
 
-Admin tooling for organisations deploying [managed-nvim](../managed-nvim). Use this repo to manage your plugin manifest, mirror plugins to your registry, and generate employee-facing distros.
+Admin tooling for organisations deploying managed-nvim. Use this repo to onboard a new org, manage the approved plugin list, and mirror plugins to your registry.
 
 ---
 
-## nvim-distro-init
+## Getting started (new organisation)
 
-Scaffolds an org-specific distro repo. Run this once when onboarding a new organisation.
+### Prerequisites
+
+- Go 1.21+
+- Git
+- Access to an Artifactory instance (generic repository)
+- A GitHub org where you can create repos and set secrets
+
+### Step 1 — Build the tools
 
 ```bash
-nvim-distro-init \
-  --org mycompany \
-  --url https://artifactory.mycompany.com/managed-neovim \
-  --key <base64-ed25519-pubkey>
+git clone https://github.com/Hawiak/managed-neovim-admin
+cd managed-neovim-admin
+go build ./cmd/nvim-manifest/
+go build ./cmd/nvim-mirror/
+go build ./cmd/nvim-distro-init/
 ```
 
-**Flags:**
-| Flag | Required | Description |
-|---|---|---|
-| `--org` | yes | Organisation name — used as the output directory prefix |
-| `--url` | yes | Artifactory base URL — baked into `install.sh` and `managed-neovim.toml` |
-| `--key` | yes | base64-encoded ed25519 public key — baked into `managed-neovim.toml` |
-| `--version` | no | Wrapper version to install (default: `latest`) |
-| `--nvim-repo` | no | GitHub repo to build the wrapper from (default: `Hawiak/managed-nvim`) |
-| `--nvim-ref` | no | Git ref of managed-nvim to build from — tag, branch, or SHA (default: `main`) |
+### Step 2 — Generate a signing key pair
 
-Outputs `mycompany-nvim-distro/` — a ready-to-push git repo containing:
-- `install.sh` — hardcoded with the org's Artifactory URL and version
-- `managed-neovim.toml` — pre-filled with URL and signing key
-- `manifest/plugins.json` — empty starter manifest
-- `.github/workflows/release.yml` — builds `nvim-wrapper` from managed-nvim source with the org's public key and publishes binaries + checksums to Artifactory on every version tag
-
-Before pushing, add two secrets to the GitHub repo:
-- `MANIFEST_PUBLIC_KEY` — the base64 ed25519 public key (same key used with `nvim-manifest sign`)
-- `ARTIFACTORY_TOKEN` — token with write access to the org's Artifactory
-
-Then tag a release to trigger the build:
 ```bash
+./nvim-manifest keygen
+```
+
+Output:
+```
+Private key written to: signing.key
+Store it in CI secrets as MANIFEST_SIGNING_KEY — never commit it.
+
+Public key (paste as --key flag and MANIFEST_PUBLIC_KEY secret):
+ABC123...base64...
+```
+
+Keep `signing.key` secret. You will need it in Step 5. The base64 public key goes into Steps 3 and 6.
+
+### Step 3 — Create the distro repo
+
+```bash
+./nvim-distro-init \
+  --org mycompany \
+  --url https://artifactory.mycompany.com/managed-neovim \
+  --key <base64-public-key-from-step-2>
+```
+
+This creates `mycompany-nvim-distro/` containing:
+- `install.sh` — the employee install script
+- `managed-neovim.toml` — wrapper config with your URL and signing key baked in
+- `manifest/plugins.json` — empty starter manifest
+- `.github/workflows/release.yml` — pipeline that builds and publishes the wrapper binary
+
+### Step 4 — Push the distro repo to GitHub
+
+```bash
+cd mycompany-nvim-distro
+git remote add origin https://github.com/mycompany/mycompany-nvim-distro
+git push -u origin main
+```
+
+### Step 5 — Add CI secrets to the distro repo
+
+In the GitHub repo settings → Secrets and variables → Actions, add:
+
+| Secret | Value |
+|---|---|
+| `MANIFEST_PUBLIC_KEY` | base64 public key from Step 2 |
+| `ARTIFACTORY_TOKEN` | Artifactory token with write access |
+
+### Step 6 — Add plugins to the manifest
+
+```bash
+cd managed-neovim-admin
+./nvim-manifest add folke/lazy.nvim <your-name>
+./nvim-manifest add nvim-treesitter/nvim-treesitter <your-name>
+# add the rest of the org's approved plugins
+```
+
+### Step 7 — Mirror plugins to Artifactory
+
+```bash
+GITEA_URL=https://artifactory.mycompany.com \
+GITEA_OWNER=mycompany \
+GITEA_TOKEN=<artifactory-token> \
+./nvim-mirror
+```
+
+### Step 8 — Sign the manifest
+
+```bash
+./nvim-manifest sign signing.key
+```
+
+Produces `manifest/plugins.json.sig`. Commit and push both files.
+
+### Step 9 — Tag a release to publish the wrapper binary
+
+```bash
+cd mycompany-nvim-distro
 git tag v1.0.0 && git push --tags
 ```
 
-Share the install one-liner with employees:
+This triggers `.github/workflows/release.yml` which builds `nvim-wrapper` for all four platforms (macOS/Linux × arm64/amd64) and publishes the binaries + checksums to Artifactory.
+
+### Step 10 — Share the install one-liner with employees
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mycompany/mycompany-nvim-distro/main/install.sh | sudo bash
@@ -48,63 +115,89 @@ curl -fsSL https://raw.githubusercontent.com/mycompany/mycompany-nvim-distro/mai
 
 ---
 
-## nvim-manifest
+## Ongoing — adding a plugin
 
-Manages `manifest/plugins.json` — the approved plugin list. All changes go through this tool so the manifest stays consistent and auditable.
-
-```bash
-nvim-manifest add <owner/repo> <approved-by>    # add a plugin
-nvim-manifest remove <plugin-name>              # remove a plugin
-nvim-manifest verify                            # check all SHAs are valid
-nvim-manifest sign <private-key-file>           # CI only — produces plugins.json.sig
-nvim-manifest verify-sig <public-key-file>      # verify the signature
-```
-
-The manifest path defaults to `manifest/plugins.json`. Override with `MANIFEST_PATH=path/to/plugins.json`.
-
-`sign` and `verify-sig` use ed25519. The private key is PEM-encoded (`PRIVATE KEY` block). Keep it in CI secrets only — never commit it.
-
----
-
-## nvim-mirror
-
-Syncs every plugin in the manifest to a Gitea generic package registry as a `.tar.gz`. Run in CI after every manifest change.
-
-**Environment variables:**
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `GITEA_URL` | no | `http://localhost:2222` | Registry base URL |
-| `GITEA_OWNER` | yes | — | Gitea user/org that owns the packages |
-| `GITEA_TOKEN` | yes | — | API token with package write access |
-| `MANIFEST_PATH` | no | `manifest/plugins.json` | Path to plugins.json |
-
-```bash
-GITEA_OWNER=myorg GITEA_TOKEN=$TOKEN nvim-mirror
-```
-
-For each plugin: clones at the pinned SHA, tarballs the source, and HTTP PUTs it to `<GITEA_URL>/api/packages/<owner>/generic/<repo>/<sha>.tar.gz`. Exits non-zero if any plugin fails.
+1. Receive a plugin request from a developer
+2. Review the plugin source for anything suspicious
+3. Add it to the manifest:
+   ```bash
+   ./nvim-manifest add <owner/repo> <your-name>
+   ```
+4. Mirror it to Artifactory:
+   ```bash
+   GITEA_OWNER=mycompany GITEA_TOKEN=<token> ./nvim-mirror
+   ```
+5. Sign the updated manifest:
+   ```bash
+   ./nvim-manifest sign signing.key
+   ```
+6. Commit and push `manifest/plugins.json` and `manifest/plugins.json.sig`
+7. The wrapper on employee machines picks up the new manifest on the next `nvim` launch
 
 ---
 
-## Typical workflow
+## Ongoing — publishing a new wrapper version
 
-1. Developer requests a new plugin via your internal process
-2. Admin reviews and runs `nvim-manifest add <owner/repo> <your-name>`
-3. CI runs `nvim-mirror` to fetch and publish the plugin archive
-4. CI runs `nvim-manifest sign` to publish a new signed manifest
-5. Wrapper on employee machines picks up the new manifest on next `nvim` launch
+When `managed-nvim` releases a new version:
+
+1. Update `--nvim-ref` in your distro by re-running `nvim-distro-init`, or edit `.github/workflows/release.yml` directly to update the `ref`
+2. Tag a new release in the distro repo:
+   ```bash
+   git tag v1.1.0 && git push --tags
+   ```
+3. Update `VERSION` in `install.sh` to the new tag so new installs get the latest binary
+
+---
+
+## Tool reference
+
+### nvim-manifest
+
+```bash
+nvim-manifest keygen                        # generate a new ed25519 key pair
+nvim-manifest add <owner/repo> <approved-by>
+nvim-manifest remove <plugin-name>
+nvim-manifest verify                        # check manifest is well-formed
+nvim-manifest sign <private-key-file>       # CI only — produces plugins.json.sig
+nvim-manifest verify-sig <public-key-file>  # verify the signature
+```
+
+Manifest path defaults to `manifest/plugins.json`. Override with `MANIFEST_PATH`.
+
+### nvim-mirror
+
+```bash
+GITEA_URL=https://...      # default: http://localhost:2222
+GITEA_OWNER=myorg          # required
+GITEA_TOKEN=<token>        # required
+MANIFEST_PATH=...          # default: manifest/plugins.json
+./nvim-mirror
+```
+
+Clones each plugin at its pinned SHA, tarballs it, and PUT to Artifactory. Exits non-zero if any plugin fails.
+
+### nvim-distro-init
+
+```bash
+nvim-distro-init \
+  --org <name>          \   # required
+  --url <artifactory>   \   # required — Artifactory base URL
+  --key <base64-pubkey> \   # required — from nvim-manifest keygen
+  --version <version>   \   # default: latest
+  --nvim-repo <owner/repo>\ # default: Hawiak/managed-nvim
+  --nvim-ref <ref>          # default: main — pin to a tag for stability
+```
 
 ---
 
 ## Local development
 
-A Gitea instance is included for testing the full mirror pipeline locally:
+A Gitea instance is included for testing the mirror pipeline without hitting production:
 
 ```bash
-docker compose up -d
+docker compose up -d   # Gitea at http://localhost:2222
+GITEA_URL=http://localhost:2222 GITEA_OWNER=test GITEA_TOKEN=<token> ./nvim-mirror
 ```
-
-Gitea runs at `http://localhost:2222`. Set `GITEA_URL=http://localhost:2222` when running `nvim-mirror` locally.
 
 ---
 
@@ -113,25 +206,27 @@ Gitea runs at `http://localhost:2222`. Set `GITEA_URL=http://localhost:2222` whe
 ```
 managed-neovim-admin/
 ├── cmd/
-│   ├── nvim-manifest/        # manifest management CLI
+│   ├── nvim-manifest/
 │   │   ├── main.go
+│   │   ├── keygen.go
 │   │   ├── add.go
 │   │   ├── remove.go
 │   │   ├── sign.go
 │   │   ├── verify.go
 │   │   └── verify_sig.go
-│   ├── nvim-mirror/          # mirrors plugins to Gitea
+│   ├── nvim-mirror/
 │   │   ├── main.go
 │   │   ├── mirror.go
 │   │   ├── archive.go
 │   │   └── gitea.go
-│   └── nvim-distro-init/     # scaffolds org distro repos
+│   └── nvim-distro-init/
 │       ├── main.go
 │       ├── install.sh.tmpl
-│       └── managed-neovim.toml.tmpl
+│       ├── managed-neovim.toml.tmpl
+│       └── release.yml.tmpl
 ├── internal/manifest/
-│   └── manifest.go           # Plugin and Manifest types, Load/Save
+│   └── manifest.go
 ├── manifest/
-│   └── plugins.json          # the org's approved plugin list
-└── docker-compose.yml        # local Gitea for testing
+│   └── plugins.json
+└── docker-compose.yml
 ```
